@@ -178,6 +178,8 @@ pub enum Display {
     /// The children will follow the CSS Grid layout algorithm
     #[cfg(feature = "grid")]
     Grid,
+    /// The element generates an inline-level box
+    Inline,
     /// The node is hidden, and it's children will also be hidden
     None,
 }
@@ -216,6 +218,7 @@ impl core::fmt::Display for Display {
             Display::Flex => write!(f, "FLEX"),
             #[cfg(feature = "grid")]
             Display::Grid => write!(f, "GRID"),
+            Display::Inline => write!(f, "INLINE"),
         }
     }
 }

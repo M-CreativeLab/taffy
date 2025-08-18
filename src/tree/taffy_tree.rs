@@ -243,6 +243,7 @@ impl<NodeContext> PrintTree for TaffyTree<NodeContext> {
 
         match (num_children, display) {
             (_, Display::None) => "NONE",
+            (_, Display::Inline) => "INLINE",
             (0, _) => "LEAF",
             #[cfg(feature = "block_layout")]
             (_, Display::Block) => "BLOCK",
@@ -381,6 +382,18 @@ where
                 (Display::Flex, true) => compute_flexbox_layout(tree, node, inputs),
                 #[cfg(feature = "grid")]
                 (Display::Grid, true) => compute_grid_layout(tree, node, inputs),
+                // Inline elements are always treated as leaf nodes regardless of whether they have children
+                (Display::Inline, _) => {
+                    let node_key = node.into();
+                    let style = &tree.taffy.nodes[node_key].style;
+                    let has_context = tree.taffy.nodes[node_key].has_context;
+                    let node_context = has_context.then(|| tree.taffy.node_context_data.get_mut(node_key)).flatten();
+                    let measure_function = |known_dimensions, available_space| {
+                        (tree.measure_function)(known_dimensions, available_space, node, node_context, style)
+                    };
+                    // TODO: implement calc() in high-level API
+                    compute_leaf_layout(inputs, style, |_, _| 0.0, measure_function)
+                }
                 (_, false) => {
                     let node_key = node.into();
                     let style = &tree.taffy.nodes[node_key].style;
