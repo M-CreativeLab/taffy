@@ -16,7 +16,7 @@ use crate::util::debug::{debug_log, debug_log_node};
 use crate::util::sys::{new_vec_with_capacity, ChildrenVec, Vec};
 
 use crate::compute::{
-    compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_root_layout, round_layout,
+    compute_cached_layout, compute_hidden_layout, compute_inline_layout, compute_leaf_layout, compute_root_layout, round_layout,
 };
 use crate::CacheTree;
 #[cfg(feature = "block_layout")]
@@ -382,7 +382,7 @@ where
                 (Display::Flex, true) => compute_flexbox_layout(tree, node, inputs),
                 #[cfg(feature = "grid")]
                 (Display::Grid, true) => compute_grid_layout(tree, node, inputs),
-                // Inline elements are always treated as leaf nodes regardless of whether they have children
+                // Inline elements use dedicated inline layout algorithm with measure function
                 (Display::Inline, _) => {
                     let node_key = node.into();
                     let style = &tree.taffy.nodes[node_key].style;
@@ -391,8 +391,7 @@ where
                     let measure_function = |known_dimensions, available_space| {
                         (tree.measure_function)(known_dimensions, available_space, node, node_context, style)
                     };
-                    // TODO: implement calc() in high-level API
-                    compute_leaf_layout(inputs, style, |_, _| 0.0, measure_function)
+                    compute_inline_layout(inputs, style, |_, _| 0.0, measure_function)
                 }
                 (_, false) => {
                     let node_key = node.into();

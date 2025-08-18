@@ -9,6 +9,7 @@
 //! | [`compute_flexbox_layout`]        | Layout a Flexbox container and it's direct children                                                                                                                                                |
 //! | [`compute_grid_layout`]           | Layout a CSS Grid container and it's direct children                                                                                                                                               |
 //! | [`compute_block_layout`]          | Layout a Block container and it's direct children                                                                                                                                                  |
+//! | [`compute_inline_layout`]         | Layout an Inline element with proper inline formatting context behavior                                                                                                                            |
 //! | [`compute_leaf_layout`]           | Applies common properties like padding/border/aspect-ratio to a node before deferring to a passed closure to determine it's size. Can be applied to nodes like text or image nodes.                |
 //! | [`compute_root_layout`]           | Layout the root node of a tree (regardless of it's layout mode). This function is typically called once to begin a layout run.                                                                     |                                                                      |
 //! | [`compute_hidden_layout`]         | Mark a node as hidden during layout (like `Display::None`)                                                                                                                                         |
@@ -23,6 +24,7 @@
 //!
 pub(crate) mod common;
 pub(crate) mod leaf;
+pub(crate) mod inline;
 
 #[cfg(feature = "block_layout")]
 pub(crate) mod block;
@@ -34,6 +36,7 @@ pub(crate) mod flexbox;
 pub(crate) mod grid;
 
 pub use leaf::compute_leaf_layout;
+pub use inline::compute_inline_layout;
 
 #[cfg(feature = "block_layout")]
 pub use self::block::compute_block_layout;
