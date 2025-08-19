@@ -16,10 +16,15 @@ use crate::{BoxSizing, CoreStyle};
 /// Compute the layout for an inline element
 /// 
 /// Inline elements have special layout behavior:
-/// - They don't establish their own layout context for children
 /// - They participate in inline formatting contexts
-/// - They have baseline alignment behavior
-/// - They don't allow margin collapsing through them
+/// - They wrap content only when exceeding the container width (CSS-correct line breaking)
+/// - They use the measure function to determine content size with proper width constraints
+/// - They support baseline alignment behavior
+/// - They don't prevent margin collapsing in the same way as block elements
+/// 
+/// This implementation provides the container's available width to the measure function,
+/// allowing proper text wrapping and line breaking behavior that matches CSS specifications.
+/// The measure function can then implement line breaking logic based on the available space.
 pub fn compute_inline_layout<MeasureFunction>(
     inputs: LayoutInput,
     style: &impl CoreStyle,
@@ -141,6 +146,10 @@ where
 
     // For inline elements, the content size is determined by the measure function
     // which could handle text content, replaced element content, etc.
+    // 
+    // The key insight for inline layout is that the available width should come from
+    // the parent container, constraining the inline element to wrap when it exceeds
+    // the container width. This matches CSS inline formatting context behavior.
     let measured_size = measure_function(
         match run_mode {
             RunMode::ComputeSize => known_dimensions,

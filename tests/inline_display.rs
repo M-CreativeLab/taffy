@@ -1,6 +1,90 @@
 use taffy::prelude::*;
 use taffy_test_helpers::new_test_tree;
 
+#[derive(Debug, Clone)]
+pub struct TextContext {
+    pub text: String,
+    pub char_width: f32,
+    pub line_height: f32,
+}
+
+impl TextContext {
+    pub fn new(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            char_width: 8.0,  // Typical monospace character width
+            line_height: 20.0, // Typical line height
+        }
+    }
+}
+
+pub fn text_measure_function(
+    known_dimensions: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    text_context: &TextContext,
+) -> Size<f32> {
+    // If both dimensions are known, return them
+    if let Size { width: Some(width), height: Some(height) } = known_dimensions {
+        return Size { width, height };
+    }
+
+    let words: Vec<&str> = text_context.text.split_whitespace().collect();
+    if words.is_empty() {
+        return Size::ZERO;
+    }
+
+    // Calculate the maximum line width based on available space
+    let max_line_width = match available_space.width {
+        AvailableSpace::Definite(width) => width,
+        AvailableSpace::MaxContent => f32::INFINITY,
+        AvailableSpace::MinContent => {
+            // Minimum width should fit the longest word
+            words.iter().map(|word| word.len() as f32 * text_context.char_width).fold(0.0, f32::max)
+        }
+    };
+
+    // If width is known, use it; otherwise calculate based on wrapping
+    let width = known_dimensions.width.unwrap_or_else(|| {
+        if max_line_width == f32::INFINITY {
+            // No width constraint, use max content width (no wrapping)
+            text_context.text.len() as f32 * text_context.char_width
+        } else {
+            max_line_width
+        }
+    });
+
+    // Calculate height based on line wrapping
+    let height = known_dimensions.height.unwrap_or_else(|| {
+        let chars_per_line = (width / text_context.char_width).floor() as usize;
+        if chars_per_line == 0 {
+            return text_context.line_height; // At least one line
+        }
+
+        let mut line_count = 1;
+        let mut current_line_length = 0;
+
+        for word in &words {
+            let word_length = word.len();
+            
+            if current_line_length == 0 {
+                // First word on the line
+                current_line_length = word_length;
+            } else if current_line_length + 1 + word_length > chars_per_line {
+                // Word doesn't fit on current line (including space)
+                line_count += 1;
+                current_line_length = word_length;
+            } else {
+                // Word fits on current line
+                current_line_length += 1 + word_length; // +1 for space
+            }
+        }
+
+        line_count as f32 * text_context.line_height
+    });
+
+    Size { width, height }
+}
+
 #[test]
 fn test_inline_display_basic() {
     let mut taffy = new_test_tree();
@@ -172,4 +256,105 @@ fn test_inline_display_ignores_width_height_styles() {
     println!("✓ Display::Inline support working correctly!");
     println!("✓ Inline elements are treated as leaf nodes for layout purposes");
     println!("✓ Inline elements still respect explicit size styles (like other leaf nodes)");
+}
+
+#[test]
+fn test_inline_text_wrapping() {
+    let mut taffy: TaffyTree<TextContext> = TaffyTree::new();
+    
+    // Create a text node with long text that should wrap
+    let text_content = "This is a long line of text that should wrap when it exceeds the container width";
+    let text_node = taffy.new_leaf_with_context(
+        Style {
+            display: Display::Inline,
+            ..Default::default()
+        },
+        TextContext::new(text_content)
+    ).unwrap();
+
+    // Create a container with limited width
+    let container = taffy.new_with_children(
+        Style {
+            display: Display::Block,
+            size: Size { width: length(200.0), height: auto() },
+            ..Default::default()
+        },
+        &[text_node]
+    ).unwrap();
+
+    // Compute layout with our text measure function
+    taffy.compute_layout_with_measure(
+        container,
+        Size::MAX_CONTENT,
+        |known_dimensions, available_space, _node_id, text_context, _style| {
+            match text_context {
+                Some(ctx) => text_measure_function(known_dimensions, available_space, ctx),
+                None => Size::ZERO,
+            }
+        }
+    ).unwrap();
+
+    let text_layout = taffy.layout(text_node).unwrap();
+    let container_layout = taffy.layout(container).unwrap();
+    
+    println!("Container size: {:?}", container_layout.size);
+    println!("Text size: {:?}", text_layout.size);
+    
+    // The text should wrap and have a height that reflects multiple lines
+    assert_eq!(container_layout.size.width, 200.0);
+    
+    // Text width should fit within container
+    // Text height should be multiple lines (more than one line height)
+    let expected_single_line_height = 20.0; // from TextContext::line_height
+    println!("Text height: {}, Expected > {}", text_layout.size.height, expected_single_line_height);
+    
+    // The text should be multiple lines high because it wraps
+    assert!(text_layout.size.height > expected_single_line_height, 
+        "Text should wrap to multiple lines and be taller than a single line");
+}
+
+#[test]
+fn test_inline_no_wrapping_when_width_sufficient() {
+    let mut taffy: TaffyTree<TextContext> = TaffyTree::new();
+    
+    // Create a short text that shouldn't need to wrap
+    let text_content = "Short text";
+    let text_node = taffy.new_leaf_with_context(
+        Style {
+            display: Display::Inline,
+            ..Default::default()
+        },
+        TextContext::new(text_content)
+    ).unwrap();
+
+    // Create a container with plenty of width
+    let container = taffy.new_with_children(
+        Style {
+            display: Display::Block,
+            size: Size { width: length(500.0), height: auto() },
+            ..Default::default()
+        },
+        &[text_node]
+    ).unwrap();
+
+    // Compute layout with our text measure function
+    taffy.compute_layout_with_measure(
+        container,
+        Size::MAX_CONTENT,
+        |known_dimensions, available_space, _node_id, text_context, _style| {
+            match text_context {
+                Some(ctx) => text_measure_function(known_dimensions, available_space, ctx),
+                None => Size::ZERO,
+            }
+        }
+    ).unwrap();
+
+    let text_layout = taffy.layout(text_node).unwrap();
+    
+    println!("Short text size: {:?}", text_layout.size);
+    
+    // Short text should be only one line high
+    let expected_single_line_height = 20.0;
+    assert_eq!(text_layout.size.height, expected_single_line_height, 
+        "Short text should be exactly one line high");
 }
