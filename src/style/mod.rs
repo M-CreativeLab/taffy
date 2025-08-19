@@ -178,6 +178,8 @@ pub enum Display {
     /// The children will follow the CSS Grid layout algorithm
     #[cfg(feature = "grid")]
     Grid,
+    /// The element generates an inline-level box
+    Inline,
     /// The node is hidden, and it's children will also be hidden
     None,
 }
@@ -216,6 +218,7 @@ impl core::fmt::Display for Display {
             Display::Flex => write!(f, "FLEX"),
             #[cfg(feature = "grid")]
             Display::Grid => write!(f, "GRID"),
+            Display::Inline => write!(f, "INLINE"),
         }
     }
 }
@@ -749,6 +752,11 @@ impl<S: CheapCloneStr> BlockItemStyle for Style<S> {
     fn is_table(&self) -> bool {
         self.item_is_table
     }
+    
+    #[inline(always)]
+    fn is_inline(&self) -> bool {
+        matches!(self.display, Display::Inline)
+    }
 }
 
 #[cfg(feature = "block_layout")]
@@ -756,6 +764,11 @@ impl<T: BlockItemStyle> BlockItemStyle for &'_ T {
     #[inline(always)]
     fn is_table(&self) -> bool {
         (*self).is_table()
+    }
+    
+    #[inline(always)]
+    fn is_inline(&self) -> bool {
+        (*self).is_inline()
     }
 }
 

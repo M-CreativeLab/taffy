@@ -390,6 +390,7 @@ fn generate_node(ident: &str, node: &Value) -> TokenStream {
             "none" => quote!(display: taffy::style::Display::None,),
             "block" => quote!(display: taffy::style::Display::Block,),
             "grid" => quote!(display: taffy::style::Display::Grid,),
+            "inline" => quote!(display: taffy::style::Display::Inline,),
             _ => quote!(display: taffy::style::Display::Flex,),
         },
         _ => quote!(),
