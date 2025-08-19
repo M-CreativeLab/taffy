@@ -752,6 +752,11 @@ impl<S: CheapCloneStr> BlockItemStyle for Style<S> {
     fn is_table(&self) -> bool {
         self.item_is_table
     }
+    
+    #[inline(always)]
+    fn is_inline(&self) -> bool {
+        matches!(self.display, Display::Inline)
+    }
 }
 
 #[cfg(feature = "block_layout")]
@@ -759,6 +764,11 @@ impl<T: BlockItemStyle> BlockItemStyle for &'_ T {
     #[inline(always)]
     fn is_table(&self) -> bool {
         (*self).is_table()
+    }
+    
+    #[inline(always)]
+    fn is_inline(&self) -> bool {
+        (*self).is_inline()
     }
 }
 

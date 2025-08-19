@@ -358,3 +358,65 @@ fn test_inline_no_wrapping_when_width_sufficient() {
     assert_eq!(text_layout.size.height, expected_single_line_height, 
         "Short text should be exactly one line high");
 }
+
+#[test]
+fn test_inline_positioning_in_block_container() {
+    let mut taffy = new_test_tree();
+    
+    // Create inline elements
+    let inline1 = taffy.new_leaf(Style {
+        display: Display::Inline,
+        size: Size::from_lengths(50.0, 20.0),
+        ..Default::default()
+    }).unwrap();
+    
+    let inline2 = taffy.new_leaf(Style {
+        display: Display::Inline,
+        size: Size::from_lengths(60.0, 25.0),
+        ..Default::default()
+    }).unwrap();
+    
+    let block_child = taffy.new_leaf(Style {
+        display: Display::Block,
+        size: Size::from_lengths(80.0, 30.0),
+        ..Default::default()
+    }).unwrap();
+    
+    // Create a block container with inline and block children
+    let container = taffy.new_with_children(
+        Style {
+            display: Display::Block,
+            size: Size::from_lengths(200.0, 200.0),
+            ..Default::default()
+        },
+        &[inline1, inline2, block_child]
+    ).unwrap();
+
+    // Compute layout
+    taffy.compute_layout(
+        container,
+        Size::MAX_CONTENT,
+    ).unwrap();
+
+    let inline1_layout = taffy.layout(inline1).unwrap();
+    let inline2_layout = taffy.layout(inline2).unwrap();
+    let block_layout = taffy.layout(block_child).unwrap();
+    let container_layout = taffy.layout(container).unwrap();
+    
+    println!("Container: {:?}", container_layout);
+    println!("Inline1: {:?}", inline1_layout);
+    println!("Inline2: {:?}", inline2_layout);
+    println!("Block: {:?}", block_layout);
+    
+    // Inline elements should be positioned horizontally next to each other
+    assert_eq!(inline1_layout.location.x, 0.0, "First inline should start at x=0");
+    assert_eq!(inline1_layout.location.y, 0.0, "First inline should start at y=0");
+    
+    // Second inline should be positioned after the first
+    assert_eq!(inline2_layout.location.x, 50.0, "Second inline should start at x=50 (after first inline)");
+    assert_eq!(inline2_layout.location.y, 0.0, "Second inline should be on same line");
+    
+    // Block element should be positioned below the inline line
+    assert_eq!(block_layout.location.x, 0.0, "Block should start at x=0");
+    assert!(block_layout.location.y > 0.0, "Block should be positioned below the inline line");
+}

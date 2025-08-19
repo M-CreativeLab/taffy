@@ -391,7 +391,7 @@ fn determine_content_based_container_width(
 /// Compute each child's final size and position
 #[inline]
 fn perform_final_layout_on_in_flow_children(
-    tree: &mut impl LayoutPartialTree,
+    tree: &mut impl LayoutBlockContainer,
     items: &mut [BlockItem],
     container_outer_width: f32,
     content_box_inset: Rect<f32>,
@@ -412,160 +412,85 @@ fn perform_final_layout_on_in_flow_children(
     let mut first_child_top_margin_set = CollapsibleMarginSet::ZERO;
     let mut active_collapsible_margin_set = CollapsibleMarginSet::ZERO;
     let mut is_collapsing_with_first_margin_set = true;
-    for item in items.iter_mut() {
+    
+    // Process items, handling inline children specially
+    let mut i = 0;
+    while i < items.len() {
+        let item = &mut items[i];
+        
         if item.position == Position::Absolute {
-            item.static_position = Point { x: resolved_content_box_inset.left, y: y_offset_for_absolute }
+            item.static_position = Point { x: resolved_content_box_inset.left, y: y_offset_for_absolute };
+            i += 1;
         } else {
-            let item_margin = item
-                .margin
-                .map(|margin| margin.resolve_to_option(container_outer_width, |val, basis| tree.calc(val, basis)));
-            let item_non_auto_margin = item_margin.map(|m| m.unwrap_or(0.0));
-            let item_non_auto_x_margin_sum = item_non_auto_margin.horizontal_axis_sum();
-            let known_dimensions = if item.is_table {
-                Size::NONE
-            } else {
-                item.size
-                    .map_width(|width| {
-                        // TODO: Allow stretch-sizing to be conditional, as there are exceptions.
-                        // e.g. Table children of blocks do not stretch fit
-                        Some(
-                            width
-                                .unwrap_or(container_inner_width - item_non_auto_x_margin_sum)
-                                .maybe_clamp(item.min_size.width, item.max_size.width),
-                        )
-                    })
-                    .maybe_clamp(item.min_size, item.max_size)
+            // Check if this child is an inline element
+            let is_inline = {
+                let child_style = tree.get_block_child_style(item.node_id);
+                child_style.is_inline()
             };
-
-            let item_layout = tree.perform_child_layout(
-                item.node_id,
-                known_dimensions,
-                parent_size,
-                available_space.map_width(|w| w.maybe_sub(item_non_auto_x_margin_sum)),
-                SizingMode::InherentSize,
-                Line::TRUE,
-            );
-            let final_size = item_layout.size;
-
-            let top_margin_set = item_layout.top_margin.collapse_with_margin(item_margin.top.unwrap_or(0.0));
-            let bottom_margin_set = item_layout.bottom_margin.collapse_with_margin(item_margin.bottom.unwrap_or(0.0));
-
-            // Expand auto margins to fill available space
-            // Note: Vertical auto-margins for relatively positioned block items simply resolve to 0.
-            // See: https://www.w3.org/TR/CSS21/visudet.html#abs-non-replaced-width
-            let free_x_space = f32_max(0.0, container_inner_width - final_size.width - item_non_auto_x_margin_sum);
-            let x_axis_auto_margin_size = {
-                let auto_margin_count = item_margin.left.is_none() as u8 + item_margin.right.is_none() as u8;
-                if auto_margin_count > 0 {
-                    free_x_space / auto_margin_count as f32
-                } else {
-                    0.0
-                }
-            };
-            let resolved_margin = Rect {
-                left: item_margin.left.unwrap_or(x_axis_auto_margin_size),
-                right: item_margin.right.unwrap_or(x_axis_auto_margin_size),
-                top: top_margin_set.resolve(),
-                bottom: bottom_margin_set.resolve(),
-            };
-
-            // Resolve item inset
-            let inset = item.inset.zip_size(Size { width: container_inner_width, height: 0.0 }, |p, s| {
-                p.maybe_resolve(s, |val, basis| tree.calc(val, basis))
-            });
-            let inset_offset = Point {
-                x: inset.left.or(inset.right.map(|x| -x)).unwrap_or(0.0),
-                y: inset.top.or(inset.bottom.map(|x| -x)).unwrap_or(0.0),
-            };
-
-            let y_margin_offset = if is_collapsing_with_first_margin_set && own_margins_collapse_with_children.start {
-                0.0
-            } else {
-                active_collapsible_margin_set.collapse_with_margin(resolved_margin.top).resolve()
-            };
-
-            item.computed_size = item_layout.size;
-            item.can_be_collapsed_through = item_layout.margins_can_collapse_through;
-            item.static_position = Point {
-                x: resolved_content_box_inset.left,
-                y: committed_y_offset + active_collapsible_margin_set.resolve(),
-            };
-            let mut location = Point {
-                x: resolved_content_box_inset.left + inset_offset.x + resolved_margin.left,
-                y: committed_y_offset + inset_offset.y + y_margin_offset,
-            };
-
-            // Apply alignment
-            let item_outer_width = item_layout.size.width + resolved_margin.horizontal_axis_sum();
-            if item_outer_width < container_inner_width {
-                match text_align {
-                    TextAlign::Auto => {
-                        // Do nothing
+            
+            if is_inline {
+                // Find consecutive inline children
+                let mut inline_end = i + 1;
+                while inline_end < items.len() {
+                    let next_item = &items[inline_end];
+                    if next_item.position == Position::Absolute {
+                        break;
                     }
-                    TextAlign::LegacyLeft => {
-                        // Do nothing. Left aligned by default.
+                    let is_next_inline = {
+                        let next_style = tree.get_block_child_style(next_item.node_id);
+                        next_style.is_inline()
+                    };
+                    if !is_next_inline {
+                        break;
                     }
-                    TextAlign::LegacyRight => location.x += container_inner_width - item_outer_width,
-                    TextAlign::LegacyCenter => location.x += (container_inner_width - item_outer_width) / 2.0,
+                    inline_end += 1;
                 }
-            }
-
-            let scrollbar_size = Size {
-                width: if item.overflow.y == Overflow::Scroll { item.scrollbar_width } else { 0.0 },
-                height: if item.overflow.x == Overflow::Scroll { item.scrollbar_width } else { 0.0 },
-            };
-
-            tree.set_unrounded_layout(
-                item.node_id,
-                &Layout {
-                    order: item.order,
-                    size: item_layout.size,
+                
+                // Layout consecutive inline children as a line
+                layout_inline_line(
+                    tree,
+                    &mut items[i..inline_end],
+                    container_outer_width,
+                    container_inner_width,
+                    parent_size,
+                    available_space,
+                    resolved_content_box_inset,
+                    &mut committed_y_offset,
+                    &mut y_offset_for_absolute,
+                    &mut active_collapsible_margin_set,
+                    &mut first_child_top_margin_set,
+                    &mut is_collapsing_with_first_margin_set,
+                    own_margins_collapse_with_children,
                     #[cfg(feature = "content_size")]
-                    content_size: item_layout.content_size,
-                    scrollbar_size,
-                    location,
-                    padding: item.padding,
-                    border: item.border,
-                    margin: resolved_margin,
-                },
-            );
-
-            #[cfg(feature = "content_size")]
-            {
-                inflow_content_size = inflow_content_size.f32_max(compute_content_size_contribution(
-                    location,
-                    final_size,
-                    item_layout.content_size,
-                    item.overflow,
-                ));
-            }
-
-            // Update first_child_top_margin_set
-            if is_collapsing_with_first_margin_set {
-                if item.can_be_collapsed_through {
-                    first_child_top_margin_set = first_child_top_margin_set
-                        .collapse_with_set(top_margin_set)
-                        .collapse_with_set(bottom_margin_set);
-                } else {
-                    first_child_top_margin_set = first_child_top_margin_set.collapse_with_set(top_margin_set);
-                    is_collapsing_with_first_margin_set = false;
-                }
-            }
-
-            // Update active_collapsible_margin_set
-            if item.can_be_collapsed_through {
-                active_collapsible_margin_set = active_collapsible_margin_set
-                    .collapse_with_set(top_margin_set)
-                    .collapse_with_set(bottom_margin_set);
-                y_offset_for_absolute = committed_y_offset + item_layout.size.height + y_margin_offset;
+                    &mut inflow_content_size,
+                );
+                
+                i = inline_end;
             } else {
-                committed_y_offset += item_layout.size.height + y_margin_offset;
-                active_collapsible_margin_set = bottom_margin_set;
-                y_offset_for_absolute = committed_y_offset + active_collapsible_margin_set.resolve();
+                // Handle non-inline (block) children with existing logic
+                layout_block_child(
+                    tree,
+                    item,
+                    container_outer_width,
+                    container_inner_width,
+                    parent_size,
+                    available_space,
+                    resolved_content_box_inset,
+                    text_align,
+                    &mut committed_y_offset,
+                    &mut y_offset_for_absolute,
+                    &mut active_collapsible_margin_set,
+                    &mut first_child_top_margin_set,
+                    &mut is_collapsing_with_first_margin_set,
+                    own_margins_collapse_with_children,
+                    #[cfg(feature = "content_size")]
+                    &mut inflow_content_size,
+                );
+                
+                i += 1;
             }
         }
     }
-
     let last_child_bottom_margin_set = active_collapsible_margin_set;
     let bottom_y_margin_offset =
         if own_margins_collapse_with_children.end { 0.0 } else { last_child_bottom_margin_set.resolve() };
@@ -573,6 +498,305 @@ fn perform_final_layout_on_in_flow_children(
     committed_y_offset += resolved_content_box_inset.bottom + bottom_y_margin_offset;
     let content_height = f32_max(0.0, committed_y_offset);
     (inflow_content_size, content_height, first_child_top_margin_set, last_child_bottom_margin_set)
+}
+
+/// Layout a single block child
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn layout_block_child(
+    tree: &mut impl LayoutBlockContainer,
+    item: &mut BlockItem,
+    container_outer_width: f32,
+    container_inner_width: f32,
+    parent_size: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    resolved_content_box_inset: Rect<f32>,
+    text_align: TextAlign,
+    committed_y_offset: &mut f32,
+    y_offset_for_absolute: &mut f32,
+    active_collapsible_margin_set: &mut CollapsibleMarginSet,
+    first_child_top_margin_set: &mut CollapsibleMarginSet,
+    is_collapsing_with_first_margin_set: &mut bool,
+    own_margins_collapse_with_children: Line<bool>,
+    #[cfg(feature = "content_size")]
+    inflow_content_size: &mut Size<f32>,
+) {
+    let item_margin = item
+        .margin
+        .map(|margin| margin.resolve_to_option(container_outer_width, |val, basis| tree.calc(val, basis)));
+    let item_non_auto_margin = item_margin.map(|m| m.unwrap_or(0.0));
+    let item_non_auto_x_margin_sum = item_non_auto_margin.horizontal_axis_sum();
+    let known_dimensions = if item.is_table {
+        Size::NONE
+    } else {
+        item.size
+            .map_width(|width| {
+                // TODO: Allow stretch-sizing to be conditional, as there are exceptions.
+                // e.g. Table children of blocks do not stretch fit
+                Some(
+                    width
+                        .unwrap_or(container_inner_width - item_non_auto_x_margin_sum)
+                        .maybe_clamp(item.min_size.width, item.max_size.width),
+                )
+            })
+            .maybe_clamp(item.min_size, item.max_size)
+    };
+
+    let item_layout = tree.perform_child_layout(
+        item.node_id,
+        known_dimensions,
+        parent_size,
+        available_space.map_width(|w| w.maybe_sub(item_non_auto_x_margin_sum)),
+        SizingMode::InherentSize,
+        Line::TRUE,
+    );
+    let final_size = item_layout.size;
+
+    let top_margin_set = item_layout.top_margin.collapse_with_margin(item_margin.top.unwrap_or(0.0));
+    let bottom_margin_set = item_layout.bottom_margin.collapse_with_margin(item_margin.bottom.unwrap_or(0.0));
+
+    // Expand auto margins to fill available space
+    // Note: Vertical auto-margins for relatively positioned block items simply resolve to 0.
+    // See: https://www.w3.org/TR/CSS21/visudet.html#abs-non-replaced-width
+    let free_x_space = f32_max(0.0, container_inner_width - final_size.width - item_non_auto_x_margin_sum);
+    let x_axis_auto_margin_size = {
+        let auto_margin_count = item_margin.left.is_none() as u8 + item_margin.right.is_none() as u8;
+        if auto_margin_count > 0 {
+            free_x_space / auto_margin_count as f32
+        } else {
+            0.0
+        }
+    };
+    let resolved_margin = Rect {
+        left: item_margin.left.unwrap_or(x_axis_auto_margin_size),
+        right: item_margin.right.unwrap_or(x_axis_auto_margin_size),
+        top: top_margin_set.resolve(),
+        bottom: bottom_margin_set.resolve(),
+    };
+
+    // Resolve item inset
+    let inset = item.inset.zip_size(Size { width: container_inner_width, height: 0.0 }, |p, s| {
+        p.maybe_resolve(s, |val, basis| tree.calc(val, basis))
+    });
+    let inset_offset = Point {
+        x: inset.left.or(inset.right.map(|x| -x)).unwrap_or(0.0),
+        y: inset.top.or(inset.bottom.map(|x| -x)).unwrap_or(0.0),
+    };
+
+    let y_margin_offset = if *is_collapsing_with_first_margin_set && own_margins_collapse_with_children.start {
+        0.0
+    } else {
+        active_collapsible_margin_set.collapse_with_margin(resolved_margin.top).resolve()
+    };
+
+    item.computed_size = item_layout.size;
+    item.can_be_collapsed_through = item_layout.margins_can_collapse_through;
+    item.static_position = Point {
+        x: resolved_content_box_inset.left,
+        y: *committed_y_offset + active_collapsible_margin_set.resolve(),
+    };
+    let mut location = Point {
+        x: resolved_content_box_inset.left + inset_offset.x + resolved_margin.left,
+        y: *committed_y_offset + inset_offset.y + y_margin_offset,
+    };
+
+    // Apply alignment
+    let item_outer_width = item_layout.size.width + resolved_margin.horizontal_axis_sum();
+    if item_outer_width < container_inner_width {
+        match text_align {
+            TextAlign::Auto => {
+                // Do nothing
+            }
+            TextAlign::LegacyLeft => {
+                // Do nothing. Left aligned by default.
+            }
+            TextAlign::LegacyRight => location.x += container_inner_width - item_outer_width,
+            TextAlign::LegacyCenter => location.x += (container_inner_width - item_outer_width) / 2.0,
+        }
+    }
+
+    let scrollbar_size = Size {
+        width: if item.overflow.y == Overflow::Scroll { item.scrollbar_width } else { 0.0 },
+        height: if item.overflow.x == Overflow::Scroll { item.scrollbar_width } else { 0.0 },
+    };
+
+    tree.set_unrounded_layout(
+        item.node_id,
+        &Layout {
+            order: item.order,
+            size: item_layout.size,
+            #[cfg(feature = "content_size")]
+            content_size: item_layout.content_size,
+            scrollbar_size,
+            location,
+            padding: item.padding,
+            border: item.border,
+            margin: resolved_margin,
+        },
+    );
+
+    #[cfg(feature = "content_size")]
+    {
+        *inflow_content_size = inflow_content_size.f32_max(compute_content_size_contribution(
+            location,
+            final_size,
+            item_layout.content_size,
+            item.overflow,
+        ));
+    }
+
+    // Update first_child_top_margin_set
+    if *is_collapsing_with_first_margin_set {
+        if item.can_be_collapsed_through {
+            *first_child_top_margin_set = first_child_top_margin_set
+                .collapse_with_set(top_margin_set)
+                .collapse_with_set(bottom_margin_set);
+        } else {
+            *first_child_top_margin_set = first_child_top_margin_set.collapse_with_set(top_margin_set);
+            *is_collapsing_with_first_margin_set = false;
+        }
+    }
+
+    // Update active_collapsible_margin_set
+    if item.can_be_collapsed_through {
+        *active_collapsible_margin_set = active_collapsible_margin_set
+            .collapse_with_set(top_margin_set)
+            .collapse_with_set(bottom_margin_set);
+        *y_offset_for_absolute = *committed_y_offset + item_layout.size.height + y_margin_offset;
+    } else {
+        *committed_y_offset += item_layout.size.height + y_margin_offset;
+        *active_collapsible_margin_set = bottom_margin_set;
+        *y_offset_for_absolute = *committed_y_offset + active_collapsible_margin_set.resolve();
+    }
+}
+
+/// Layout a line of consecutive inline children
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn layout_inline_line(
+    tree: &mut impl LayoutBlockContainer,
+    inline_items: &mut [BlockItem],
+    container_outer_width: f32,
+    container_inner_width: f32,
+    parent_size: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    resolved_content_box_inset: Rect<f32>,
+    committed_y_offset: &mut f32,
+    y_offset_for_absolute: &mut f32,
+    active_collapsible_margin_set: &mut CollapsibleMarginSet,
+    _first_child_top_margin_set: &mut CollapsibleMarginSet,
+    is_collapsing_with_first_margin_set: &mut bool,
+    own_margins_collapse_with_children: Line<bool>,
+    #[cfg(feature = "content_size")]
+    inflow_content_size: &mut Size<f32>,
+) {
+    // For now, implement a simple inline layout that positions elements horizontally
+    // TODO: Implement proper line wrapping when elements exceed container width
+    
+    let mut current_x = resolved_content_box_inset.left;
+    let mut line_height = 0.0f32;
+    
+    // First pass: layout all inline children and determine line dimensions
+    for item in inline_items.iter_mut() {
+        let item_margin = item
+            .margin
+            .map(|margin| margin.resolve_to_option(container_outer_width, |val, basis| tree.calc(val, basis)));
+        let _item_non_auto_margin = item_margin.map(|m| m.unwrap_or(0.0));
+        
+        // For inline elements, don't stretch to fill container width
+        let known_dimensions = item.size.maybe_clamp(item.min_size, item.max_size);
+        
+        let item_layout = tree.perform_child_layout(
+            item.node_id,
+            known_dimensions,
+            parent_size,
+            available_space,
+            SizingMode::InherentSize,
+            Line::TRUE,
+        );
+        
+        let final_size = item_layout.size;
+        
+        // For inline elements, vertical margins typically don't affect line height in the same way
+        // but we'll handle basic margin resolution
+        let resolved_margin = Rect {
+            left: item_margin.left.unwrap_or(0.0),
+            right: item_margin.right.unwrap_or(0.0),
+            top: item_margin.top.unwrap_or(0.0),
+            bottom: item_margin.bottom.unwrap_or(0.0),
+        };
+        
+        // Resolve item inset
+        let inset = item.inset.zip_size(Size { width: container_inner_width, height: 0.0 }, |p, s| {
+            p.maybe_resolve(s, |val, basis| tree.calc(val, basis))
+        });
+        let inset_offset = Point {
+            x: inset.left.or(inset.right.map(|x| -x)).unwrap_or(0.0),
+            y: inset.top.or(inset.bottom.map(|x| -x)).unwrap_or(0.0),
+        };
+
+        item.computed_size = item_layout.size;
+        item.can_be_collapsed_through = false; // Inline elements typically can't be collapsed through
+        item.static_position = Point {
+            x: current_x,
+            y: *committed_y_offset,
+        };
+        
+        let location = Point {
+            x: current_x + inset_offset.x + resolved_margin.left,
+            y: *committed_y_offset + inset_offset.y + resolved_margin.top,
+        };
+
+        let scrollbar_size = Size {
+            width: if item.overflow.y == Overflow::Scroll { item.scrollbar_width } else { 0.0 },
+            height: if item.overflow.x == Overflow::Scroll { item.scrollbar_width } else { 0.0 },
+        };
+
+        tree.set_unrounded_layout(
+            item.node_id,
+            &Layout {
+                order: item.order,
+                size: item_layout.size,
+                #[cfg(feature = "content_size")]
+                content_size: item_layout.content_size,
+                scrollbar_size,
+                location,
+                padding: item.padding,
+                border: item.border,
+                margin: resolved_margin,
+            },
+        );
+
+        #[cfg(feature = "content_size")]
+        {
+            *inflow_content_size = inflow_content_size.f32_max(compute_content_size_contribution(
+                location,
+                final_size,
+                item_layout.content_size,
+                item.overflow,
+            ));
+        }
+        
+        // Move to next inline position
+        current_x += resolved_margin.left + final_size.width + resolved_margin.right;
+        line_height = f32_max(line_height, resolved_margin.top + final_size.height + resolved_margin.bottom);
+    }
+    
+    // Update vertical position for the inline line
+    let y_margin_offset = if *is_collapsing_with_first_margin_set && own_margins_collapse_with_children.start {
+        0.0
+    } else {
+        active_collapsible_margin_set.resolve()
+    };
+    
+    // For inline elements, we typically don't collapse margins in the same way as block elements
+    if *is_collapsing_with_first_margin_set {
+        *is_collapsing_with_first_margin_set = false;
+    }
+    
+    *committed_y_offset += line_height + y_margin_offset;
+    *y_offset_for_absolute = *committed_y_offset;
+    *active_collapsible_margin_set = CollapsibleMarginSet::ZERO;
 }
 
 /// Perform absolute layout on all absolutely positioned children.

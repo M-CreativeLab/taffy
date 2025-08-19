@@ -17,6 +17,12 @@ pub trait BlockItemStyle: CoreStyle {
     fn is_table(&self) -> bool {
         false
     }
+    
+    /// Whether the item is inline. Inline children are handled specially in block layout.
+    #[inline(always)]
+    fn is_inline(&self) -> bool {
+        false
+    }
 }
 
 /// Used by block layout to implement the legacy behaviour of `<center>` and `<div align="left | right | center">`
